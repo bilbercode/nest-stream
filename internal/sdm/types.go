@@ -6,7 +6,7 @@ import (
 )
 
 type Service interface {
-	GetDevices(ctx context.Context) ([]*Device, error)
+	GetDevices(ctx context.Context, projectID string) ([]*Device, error)
 	GenerateRTSPStream(ctx context.Context, device *Device) (*CommandResponseGenerateRTSPStream, error)
 	ExtendToken(ctx context.Context, device *Device, token string) (*CommandResponseExtendRtspStream, error)
 }

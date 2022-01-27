@@ -89,13 +89,17 @@ func (s *server) Start(ctx context.Context, addr string) error {
 		return fmt.Errorf("failed to listen on address %s: %w", addr, err)
 	}
 
+	go func() {
+		<-ctx.Done()
+		listener.Close()
+	}()
 	for {
 		nc, err := listener.Accept()
 		switch {
 		case err == context.Canceled:
 			return nil
 		case err != nil:
-			// TODO (bilbercode) log error
+			return err
 		default:
 			go s.handle(ctx, nc)
 		}

@@ -16,8 +16,8 @@ func NewService(client *http.Client) Service {
 	return &service{client: client}
 }
 
-func (s *service) GetDevices(ctx context.Context) ([]*Device, error) {
-	res, err := s.client.Get("https://smartdevicemanagement.googleapis.com/v1/enterprises/234002b4-5044-4aa9-b10c-f2a3ab82f648/devices/")
+func (s *service) GetDevices(ctx context.Context, projectID string) ([]*Device, error) {
+	res, err := s.client.Get(fmt.Sprintf("https://smartdevicemanagement.googleapis.com/v1/enterprises/%s/devices/", projectID))
 	if err != nil {
 		return nil, fmt.Errorf("failed to query devices from google: %w", err)
 	}

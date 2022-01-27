@@ -78,7 +78,7 @@ func (a *Manager) runWeb(ctx context.Context) error {
 	})
 	mux.HandleFunc("/oauth2/redirect", func(writer http.ResponseWriter, request *http.Request) {
 		code := request.URL.Query().Get("code")
-		f, err := os.OpenFile("token", os.O_TRUNC|os.O_CREATE|os.O_RDWR, 0755)
+		f, err := os.OpenFile(a.tokenLocation, os.O_TRUNC|os.O_CREATE|os.O_RDWR, 0755)
 		if err != nil {
 			http.Error(writer, err.Error(), http.StatusInternalServerError)
 			return

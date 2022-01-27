@@ -78,7 +78,7 @@ func main() {
 	})
 
 	app.Action = func() {
-		ctx := context.Background()
+		ctx, cancel := context.WithCancel(context.Background())
 
 		authManager, err := auth.NewManager(*projectID, *credentialsLocation, *tokenLocation, *httpBaseURL)
 		if err != nil {
@@ -115,7 +115,7 @@ func main() {
 			deviceClient := sdm.NewService(client)
 			log.Info("client received, querying for SDM devices")
 
-			devices, err := deviceClient.GetDevices(ctx)
+			devices, err := deviceClient.GetDevices(ctx, *projectID)
 			if err != nil {
 				return fmt.Errorf("failed to query google SDM for devices: %w", err)
 			}
@@ -143,7 +143,8 @@ func main() {
 					retryCount++
 					goto getToken
 				case err != nil:
-					log.Info("failed to get token from google, bailing")
+					log.WithError(err).Error("failed to get token from google, bailing")
+					cancel()
 					return err
 				case token == nil:
 					log.Info("failed to get token from google, retrying")
