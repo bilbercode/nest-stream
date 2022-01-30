@@ -1,0 +1,58 @@
+syntax = "proto3";
+
+package nest_stream;
+
+option go_package = "github.com/bilbercode/nest-stream/pkg/nest_stream";
+
+import "google/protobuf/empty.proto";
+import "google/api/annotations.proto";
+import "protoc-gen-openapiv2/options/annotations.proto";
+
+
+option (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_swagger) = {
+  info: {
+    title: "Nest Stream API"
+    version: "1.0.0"
+    contact: {
+      name: "Owain Llewellyn"
+      url: "https://github.com/bilbercode/nest-stream.git"
+      email: "bilbercode@gmail.com"
+    }
+  };
+}
+;
+
+service CameraService {
+  rpc ListCameras(google.protobuf.Empty) returns(Cameras) {
+    option (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_operation) = {
+      description: "Lists all compatible cameras"
+    };
+
+    option (google.api.http) = {
+      get: "/cameras"
+    };
+  };
+
+  rpc UpdateCamera(Camera) returns (Camera) {
+    option (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_operation) = {
+      description: "Updates local camera metadata"
+    };
+
+    option (google.api.http) = {
+      put: "/cameras"
+      body: "*"
+    };
+  };
+}
+
+
+message Cameras {
+  repeated Camera devices = 1;
+}
+
+message Camera {
+  string id = 1;
+  string name = 2;
+  string type = 3;
+  bool enabled = 4;
+}

@@ -2,25 +2,33 @@ package main
 
 import (
 	"context"
-	"crypto/tls"
-	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
-	"path"
-	"strconv"
-	"strings"
-	"sync"
-	"time"
+
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+
+	"github.com/bilbercode/nest-stream/internal/api"
+	"github.com/bilbercode/nest-stream/internal/swagger"
+	"github.com/utilitywarehouse/swaggerui"
+	"google.golang.org/protobuf/encoding/protojson"
+
+	"github.com/bilbercode/nest-stream/internal/camera"
+
+	grpc_middleware "github.com/grpc-ecosystem/go-grpc-middleware"
+	grpc_logrus "github.com/grpc-ecosystem/go-grpc-middleware/logging/logrus"
+	grpc_recovery "github.com/grpc-ecosystem/go-grpc-middleware/recovery"
+	grpc_prometheus "github.com/grpc-ecosystem/go-grpc-prometheus"
+	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
+	healthpb "google.golang.org/grpc/health/grpc_health_v1"
+
+	"github.com/bilbercode/nest-stream/pkg/nest_stream"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/health"
 
 	"github.com/bilbercode/nest-stream/internal/rtsp"
-
-	"github.com/pion/rtp"
-
-	"github.com/pion/sdp/v3"
 
 	"github.com/bilbercode/nest-stream/internal/sdm"
 
@@ -36,11 +44,16 @@ const (
 	appDesc = "nest camera proxy"
 )
 
-var previousSessionID string
-
 func main() {
 
 	app := cli.App(appName, appDesc)
+
+	grpcPort := app.Int(cli.IntOpt{
+		Name:   "grpc-port",
+		Desc:   "grpc service port",
+		EnvVar: "GRPC_PORT",
+		Value:  8090,
+	})
 
 	httpBaseURL := app.String(cli.StringOpt{
 		Name:   "url.http",
@@ -77,8 +90,15 @@ func main() {
 		Value:  "data/token",
 	})
 
+	database := app.String(cli.StringOpt{
+		Name:   "database",
+		Desc:   "database folder location",
+		EnvVar: "DATABASE",
+		Value:  "data/devices",
+	})
+
 	app.Action = func() {
-		ctx, cancel := context.WithCancel(context.Background())
+		ctx := context.Background()
 
 		authManager, err := auth.NewManager(*projectID, *credentialsLocation, *tokenLocation, *httpBaseURL)
 		if err != nil {
@@ -90,20 +110,17 @@ func main() {
 			log.WithError(err).Panic("failed to parse RTSP base url")
 		}
 
+		grpcAPI := api.NewGRPCAPI()
+
 		rtspServer := rtsp.NewServer(rtspBase)
 
 		group, ctx := errgroup.WithContext(ctx)
-
-		group.Go(func() error {
-			return authManager.Start(ctx)
-		})
 
 		group.Go(func() error {
 			return rtspServer.Start(ctx, fmt.Sprintf(":%s", rtspBase.Port()))
 		})
 
 		group.Go(func() error {
-			log.Info("waiting for client from auth manager")
 
 			var client *http.Client
 			select {
@@ -112,78 +129,35 @@ func main() {
 			case client = <-authManager.GetClient():
 			}
 
-			deviceClient := sdm.NewService(client)
-			log.Info("client received, querying for SDM devices")
-
-			devices, err := deviceClient.GetDevices(ctx, *projectID)
+			deviceClient, err := sdm.NewService(client, *database)
 			if err != nil {
-				return fmt.Errorf("failed to query google SDM for devices: %w", err)
+				log.WithError(err).Panic("failed to start SDM service")
 			}
-			// TODO (bilbercode) this should be configurable from GUI
-			// TODO (GUI)
+			log.Info("client received from auth manager, creating camera proxy service")
 
-			// Start a new conference for each device
-			log.Info("Generating persistent conference for front_door")
+			cameraService := camera.NewService(deviceClient, rtspServer, *rtspBaseURL)
 
-			var (
-				previousConnCtxCancel context.CancelFunc
-				camera                rtsp.Camera
-				token                 *sdm.CommandResponseGenerateRTSPStream
-			)
+			group.Go(func() error {
+				return cameraService.Start(ctx)
+			})
 
-			retryCount := 0
-			for {
-			getToken:
-				log.Info("Requesting new stream location from Google")
+			grpcAPI.SetSDMService(deviceClient, *projectID)
+			log.Info("GRPc API Ready")
 
-				token, err = deviceClient.GenerateRTSPStream(ctx, devices[0])
-				switch {
-				case retryCount < 5 && err != nil:
-					log.Info("failed to get token from google, retrying")
-					retryCount++
-					goto getToken
-				case err != nil:
-					log.WithError(err).Error("failed to get token from google, bailing")
-					cancel()
-					return err
-				case token == nil:
-					log.Info("failed to get token from google, retrying")
-					retryCount++
-					goto getToken
-				default:
-					retryCount = 0
-				}
+			return nil
+		})
 
-				for _, tokenURI := range token.URLS {
-					log.Info("Joining new stream to front_door conference")
-					streamCtx, cam, _, err := joinURLToConference(ctx, tokenURI, rtspServer, camera)
-					switch {
-					case retryCount < 5 && err != nil:
-						log.Info("stream failure, restarting")
-						retryCount++
-						goto getToken
-					case err != nil:
-						log.Info("stream failure, bailing")
-						return err
-					default:
-						log.Info("Joined")
-						retryCount = 0
-					}
+		grpcServer := initialiseGRPCServer(grpcAPI)
+		startGRPCServer(grpcServer, grpcPort)
+		defer grpcServer.GracefulStop()
 
-					if previousConnCtxCancel != nil {
-						previousConnCtxCancel()
-					}
+		authManager.GetMux().Handle("/__/metrics", promhttp.Handler())
 
-					camera = cam
-					select {
-					case <-streamCtx.Done():
-						break
-					case <-ctx.Done():
-						return nil
-					}
-				}
+		initialiseSwaggerAPI(ctx, authManager.GetMux(), grpcPort)
 
-			}
+		group.Go(func() error {
+			log.Info("Starting Auth manager")
+			return authManager.Start(ctx)
 		})
 
 		err = group.Wait()
@@ -198,187 +172,66 @@ func main() {
 	}
 }
 
-func joinURLToConference(ctx context.Context, addr string, server rtsp.Server, camera rtsp.Camera) (context.Context, rtsp.Camera, context.CancelFunc, error) {
-	seq := int64(1)
-	uri, err := url.Parse(addr)
+func initialiseSwaggerAPI(ctx context.Context, mux *http.ServeMux, grpcPort *int) {
+
+	gwmux := runtime.NewServeMux(runtime.WithMarshalerOption(runtime.MIMEWildcard, &runtime.JSONPb{
+		MarshalOptions: protojson.MarshalOptions{
+			UseProtoNames:   true,
+			EmitUnpopulated: true,
+		},
+		UnmarshalOptions: protojson.UnmarshalOptions{},
+	}))
+
+	mux.Handle("/", gwmux)
+	mux.Handle("/swagger-ui/", http.StripPrefix("/swagger-ui/", swaggerui.SwaggerUI()))
+	mux.Handle("/swagger.json", http.FileServer(http.FS(swagger.Static)))
+
+	dialOpts := []grpc.DialOption{grpc.WithInsecure()}
+	err := nest_stream.RegisterCameraServiceHandlerFromEndpoint(ctx, gwmux, fmt.Sprintf("localhost:%d", *grpcPort), dialOpts)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to parse URL: %w", err)
+		log.WithError(err).Panic("unable to register gateway handler")
 	}
+}
 
-	ctx, cancel := context.WithCancel(ctx)
-	dialer := &net.Dialer{}
-	nc, err := dialer.DialContext(ctx, "tcp", uri.Host)
-	if err != nil {
-		cancel()
-		return nil, nil, nil, fmt.Errorf("failed to dial endpoint %s: %w", uri.Host, err)
-	}
+func initialiseGRPCServer(svc nest_stream.CameraServiceServer) *grpc.Server {
+	grpc_prometheus.EnableHandlingTimeHistogram()
 
-	if uri.Scheme == "rtsps" {
-		config := &tls.Config{
-			ServerName: uri.Hostname(),
-		}
-		nc = tls.Client(nc, config)
-	}
-
-	rtspClient := rtsp.NewClientWithContextCancel(nc, ctx, cancel)
-
-	header := http.Header{
-		"Accept": []string{"application/sdp"},
-	}
-	res, err := rtspClient.SendRequest(ctx, &rtsp.Request{
-		Version:  "1.0",
-		Url:      uri.String(),
-		Sequence: strconv.FormatInt(seq, 10),
-		Method:   rtsp.MethodDescribe,
-		Header:   header,
-	})
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to get session description for url %s: %w", uri.String(), err)
-	}
-	seq++
-
-	sessionDescription := &sdp.SessionDescription{}
-	b, err := io.ReadAll(res.Body)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to copy resposne body for Describe on URL %s: %w", uri.String(), err)
-	}
-	err = sessionDescription.Unmarshal(b)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to parse SDP for URL %s: %w", uri.String(), err)
-	}
-
-	base := res.Header.Get("Content-Base")
-	trackID := 0
-
-	rtpChan := make(chan *rtp.Packet)
-	var sessionID string
-	var mediaDescription *sdp.MediaDescription
-	for i, md := range sessionDescription.MediaDescriptions {
-		if i == 0 {
-			continue
-		}
-		mediaDescription = md
-		client := rtspClient
-
-		control, ok := md.Attribute("control")
-		if !ok {
-			return nil, nil, nil, errors.New("SDP failed to return control attribute ")
-		}
-
-		// Setup
-		header = http.Header{
-			"Transport": []string{
-				fmt.Sprintf("AVP/RTP/TCP;unicast;interleaved=%d-%d", trackID*2, (trackID*2)+1),
-			},
-		}
-
-		res, err = client.SendRequest(ctx, &rtsp.Request{
-			Version:  "1.0",
-			Url:      path.Join(base, control),
-			Sequence: strconv.FormatInt(seq, 10),
-			Method:   rtsp.MethodSetup,
-			Header:   header,
-		})
-
-		if err != nil {
-			return nil, nil, nil, fmt.Errorf("failed setup resources on URL %s: %w", path.Join(base, "trackID=1"), err)
-		}
-		seq++
-
-		sessionID = strings.Split(res.Header.Get("Session"), ";")[0]
-		if sessionID == "" {
-			return nil, nil, nil, errors.New("no session ID returned")
-		}
-
-		if previousSessionID == sessionID {
-			log.Error("FFS google")
-		}
-		previousSessionID = sessionID
-
-		if camera == nil {
-			camera = server.RegisterCamera("front_door", mediaDescription)
-		}
-
-		go camera.MergeStream(rtpChan, sessionID)
-
-		var timer *time.Timer
-
-		once := sync.Once{}
-		client.SubscribeInterleavedFrames(func(channel uint8, payload []byte) {
-			if channel == 0 {
-				if timer != nil {
-					timer.Reset(time.Second * 10)
-				}
-				once.Do(func() {
-					go func() {
-						timer = time.NewTimer(time.Second * 30)
-						for {
-							select {
-							case <-ctx.Done():
-								return
-							case <-timer.C:
-								close(rtpChan)
-								cancel()
-							}
-						}
-					}()
-				})
-				packet := &rtp.Packet{}
-				err := packet.Unmarshal(payload)
-				if err == nil {
-					select {
-					case <-ctx.Done():
-						log.Info("Context Done")
-						return
-					case rtpChan <- packet:
-					}
-				}
+	logger := log.New()
+	logger.SetLevel(log.WarnLevel)
+	grpc_logrus.ReplaceGrpcLogger(log.NewEntry(logger))
+	logOpts := []grpc_logrus.Option{
+		grpc_logrus.WithDecider(func(methodFullName string, err error) bool {
+			if err == nil && methodFullName == "/grpc.health.v1.Health/Check" {
+				return false
 			}
-		})
 
-		trackID++
+			// by default you will log all calls
+			return true
+		}),
 	}
+	grpcServer := grpc.NewServer(
+		grpc.UnaryInterceptor(grpc_middleware.ChainUnaryServer(
+			grpc_prometheus.UnaryServerInterceptor,
+			grpc_recovery.UnaryServerInterceptor(),
+			grpc_logrus.UnaryServerInterceptor(log.NewEntry(log.StandardLogger()), logOpts...),
+		)),
+	)
 
-	header = http.Header{}
-	header.Set("Session", sessionID)
+	nest_stream.RegisterCameraServiceServer(grpcServer, svc)
+	healthpb.RegisterHealthServer(grpcServer, health.NewServer())
 
-	res, err = rtspClient.SendRequest(ctx, &rtsp.Request{
-		Version:  "1.0",
-		Url:      base,
-		Method:   rtsp.MethodPlay,
-		Header:   header,
-		Sequence: strconv.FormatInt(seq, 10),
-	})
+	return grpcServer
+}
+
+func startGRPCServer(grpcServer *grpc.Server, grpcPort *int) {
+	listen, err := net.Listen("tcp", fmt.Sprintf(":%d", *grpcPort))
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to get session description for url %s: %w", uri.String(), err)
+		log.WithField("port", grpcPort).WithError(err).Panic("could not listen on GRPC port")
 	}
 
-	seq++
 	go func() {
-		timer := time.NewTimer(time.Second * 30)
-		for {
-			select {
-			case <-rtspClient.Done():
-			case <-timer.C:
-				res, err = rtspClient.SendRequest(ctx, &rtsp.Request{
-					Version:  "1.0",
-					Url:      addr,
-					Method:   rtsp.MethodGetParameter,
-					Sequence: strconv.FormatInt(seq, 10),
-					Header:   header,
-				})
-
-				if err != nil {
-					cancel()
-				}
-				if res == nil || ctx.Err() != nil {
-					return
-				}
-				seq++
-				timer.Reset(time.Second * 30)
-			}
+		if err := grpcServer.Serve(listen); err != nil {
+			log.WithError(err).Panic("could not serve GRPC connections")
 		}
 	}()
-
-	return ctx, camera, cancel, nil
 }

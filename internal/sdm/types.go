@@ -7,8 +7,11 @@ import (
 
 type Service interface {
 	GetDevices(ctx context.Context, projectID string) ([]*Device, error)
-	GenerateRTSPStream(ctx context.Context, device *Device) (*CommandResponseGenerateRTSPStream, error)
+	GenerateRTSPStream(ctx context.Context, deviceID string) (*CommandResponseGenerateRTSPStream, error)
 	ExtendToken(ctx context.Context, device *Device, token string) (*CommandResponseExtendRtspStream, error)
+	GetDeviceMeta(id string) (*Meta, error)
+	UpdateDeviceMeta(meta *Meta) error
+	Subscribe(f func(*Event)) func()
 }
 
 type DeviceInfo struct {
@@ -77,4 +80,10 @@ type CommandResponseExtendRtspStream struct {
 	ExtensionToken string    `json:"streamExtensionToken"`
 	Token          string    `json:"streamToken"`
 	ExpiresAt      time.Time `json:"expiresAt"`
+}
+
+type Meta struct {
+	Id      string
+	Name    string
+	Enabled bool
 }

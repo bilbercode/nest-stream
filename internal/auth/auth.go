@@ -24,6 +24,7 @@ type Manager struct {
 	c             chan *http.Client
 	endpoint      string
 	tokenLocation string
+	mux           *http.ServeMux
 }
 
 func NewManager(projectID string, credentials, tokenLocation, endpoint string) (*Manager, error) {
@@ -46,6 +47,7 @@ func NewManager(projectID string, credentials, tokenLocation, endpoint string) (
 		c:             make(chan *http.Client),
 		tokenLocation: tokenLocation,
 		endpoint:      endpoint,
+		mux:           http.NewServeMux(),
 	}, nil
 }
 
@@ -68,8 +70,12 @@ func (a *Manager) Start(ctx context.Context) error {
 	return group.Wait()
 }
 
+func (a *Manager) GetMux() *http.ServeMux {
+	return a.mux
+}
+
 func (a *Manager) runWeb(ctx context.Context) error {
-	mux := http.NewServeMux()
+	mux := a.mux
 	mux.HandleFunc("/oauth2/start", func(writer http.ResponseWriter, request *http.Request) {
 		a.Lock()
 		defer a.Unlock()

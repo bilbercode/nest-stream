@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"path"
 	"strconv"
 	"strings"
 	"sync"
@@ -66,7 +67,7 @@ func NewServer(basepath *url.URL) Server {
 				},
 				{
 					Key:   "control",
-					Value: "*", // TODO (bilbercode) ratify this
+					Value: "*",
 				},
 			},
 		},
@@ -172,8 +173,9 @@ func (s *server) handleDescribe(ctx context.Context, request *Request, cli Clien
 		)
 	}
 
+	_, cameraURI := path.Split(requestURL.Path)
 	s.Lock()
-	camera, ok := s.cameras["front_door"]
+	camera, ok := s.cameras[cameraURI]
 	s.Unlock()
 	if !ok {
 		return cli.SendResponse(ctx, &Response{
@@ -216,9 +218,14 @@ func (s *server) handleDescribe(ctx context.Context, request *Request, cli Clien
 }
 
 func (s *server) handleSetup(ctx context.Context, request *Request, cli Client) error {
-
+	requestURL, err := url.Parse(request.Url)
+	if err != nil {
+		return s.returnError(ctx, nil, cli, request.Sequence, http.StatusBadRequest, "invalid URL provided")
+	}
+	cameraURI, _ := path.Split(requestURL.Path)
+	_, cameraURI = path.Split(strings.TrimSuffix(cameraURI, "/"))
 	s.Lock()
-	camera, ok := s.cameras["front_door"]
+	camera, ok := s.cameras[cameraURI]
 	s.Unlock()
 	if !ok {
 		return cli.SendResponse(ctx, &Response{
@@ -287,38 +294,6 @@ func (s *server) handleSetup(ctx context.Context, request *Request, cli Client) 
 			},
 		)
 
-		//go func() {
-		//	timer := time.NewTimer(time.Second * 10)
-		//	for {
-		//		select {
-		//		case <-timer.C:
-		//			senderLock.Lock()
-		//
-		//			report := rtcp.SenderReport{
-		//				SSRC: ssrc,
-		//				NTPTime: func() uint64 {
-		//					s := (float64(time.Now().UnixNano()) / 1000000000) + 2208988800
-		//					integerPart := uint32(s)
-		//					fractionalPart := uint32((s - float64(integerPart)) * 0xFFFFFFFF)
-		//					return uint64(integerPart)<<32 | uint64(fractionalPart)
-		//				}(),
-		//				RTPTime:     lastRTPTimeRPT + uint32(time.Now().Sub(lastRTPTime).Seconds()*90000),
-		//				PacketCount: sent,
-		//				OctetCount:  oc,
-		//			}
-		//
-		//			b, err := report.Marshal()
-		//			if err == nil {
-		//				payload := []byte{0x24, 1, 0x00, 0x00}
-		//				binary.BigEndian.PutUint16(payload[:2], uint16(len(b)))
-		//				payload = append(payload, b...)
-		//				cli.Conn().Write(payload)
-		//			}
-		//			senderLock.Unlock()
-		//		}
-		//	}
-		//}()
-
 		header := http.Header{}
 		header.Set("Session", "3984798345")
 		header.Set("Transport", ts.Options()[0].String())
@@ -342,10 +317,15 @@ func (s *server) handleSetup(ctx context.Context, request *Request, cli Client) 
 }
 
 func (s *server) handlePlay(ctx context.Context, request *Request, cli Client) error {
+	requestURL, err := url.Parse(request.Url)
+	if err != nil {
+		return s.returnError(ctx, nil, cli, request.Sequence, http.StatusBadRequest, "invalid URL provided")
+	}
+	_, cameraURI := path.Split(requestURL.Path)
 	if request.Header.Get("Session") != "" {
 
 		s.Lock()
-		camera, ok := s.cameras["front_door"]
+		camera, ok := s.cameras[cameraURI]
 		s.Unlock()
 		if !ok {
 			return cli.SendResponse(ctx, &Response{
@@ -390,9 +370,14 @@ func (s *server) handleGetParameter(ctx context.Context, request *Request, cli C
 }
 
 func (s *server) handleTeardown(ctx context.Context, request *Request, cli Client) error {
+	requestURL, err := url.Parse(request.Url)
+	if err != nil {
+		return s.returnError(ctx, nil, cli, request.Sequence, http.StatusBadRequest, "invalid URL provided")
+	}
+	_, cameraURI := path.Split(requestURL.Path)
 	if request.Header.Get("Session") != "" {
 		s.Lock()
-		camera, ok := s.cameras["front_door"]
+		camera, ok := s.cameras[cameraURI]
 		s.Unlock()
 		if !ok {
 			return cli.SendResponse(ctx, &Response{
