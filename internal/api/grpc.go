@@ -4,7 +4,8 @@ import (
 	"context"
 	"strings"
 
-	"github.com/bilbercode/nest-stream/internal/sdm"
+	"github.com/bilbercode/nest-stream/internal/devices"
+
 	"github.com/bilbercode/nest-stream/pkg/nest_stream"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -14,10 +15,10 @@ import (
 type grpcAPI struct {
 	nest_stream.UnimplementedCameraServiceServer
 	projectID string
-	sdm       sdm.Service
+	sdm       devices.Service
 }
 
-func (g *grpcAPI) SetSDMService(service sdm.Service, projectID string) {
+func (g *grpcAPI) SetSDMService(service devices.Service, projectID string) {
 	g.projectID = projectID
 	g.sdm = service
 }
@@ -27,7 +28,7 @@ func (g *grpcAPI) ListCameras(ctx context.Context, _ *emptypb.Empty) (*nest_stre
 		return nil, status.Error(codes.Unavailable, "no client available, please check you have completed oauth2 process")
 	}
 
-	devices, err := g.sdm.GetDevices(ctx, g.projectID)
+	devices, err := g.sdm.GetDevices(ctx)
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
@@ -38,7 +39,18 @@ func (g *grpcAPI) ListCameras(ctx context.Context, _ *emptypb.Empty) (*nest_stre
 
 	var cameras []*nest_stream.Camera
 	for _, device := range devices {
-		if device.Traits.LiveStream != nil && supportsRTSPProtocol(device.Traits.LiveStream.SupportedProtocols) {
+
+		traits := device.Traits.AsMap()
+		liveStream, ok := traits["sdm.devices.traits.CameraLiveStream"]
+		if !ok {
+			continue
+		}
+
+		protocols, ok := liveStream.(map[string]interface{})["supportedProtocols"]
+		switch {
+		case !ok:
+			continue
+		case supportsRTSPProtocol(protocols.([]string)):
 			meta, _ := g.sdm.GetDeviceMeta(device.Name)
 			if meta != nil {
 				cameras = append(cameras, &nest_stream.Camera{
@@ -68,7 +80,7 @@ func (g *grpcAPI) UpdateCamera(ctx context.Context, camera *nest_stream.Camera) 
 	if g.sdm == nil {
 		return nil, status.Error(codes.Unavailable, "no client available, please check you have completed oauth2 process")
 	}
-	err := g.sdm.UpdateDeviceMeta(&sdm.Meta{Id: camera.Id, Name: camera.Name, Enabled: camera.Enabled})
+	err := g.sdm.UpdateDeviceMeta(&devices.Meta{Id: camera.Id, Name: camera.Name, Enabled: camera.Enabled})
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}

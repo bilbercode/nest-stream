@@ -152,17 +152,14 @@ func (c *client) readLoop() {
 	reader := textproto.NewReader(br)
 	for {
 		_ = c.rtspSocket.SetReadDeadline(time.Now().Add(time.Second))
-		// c.RLock()
 		first, err := br.ReadByte()
 		switch et := err.(type) {
 		case net.Error:
 			if et.Timeout() {
-				// c.RUnlock()
 				continue
 			}
 			c.err = err
 			c.cancel()
-			// c.RUnlock()
 			return
 		case nil:
 			break
@@ -171,14 +168,12 @@ func (c *client) readLoop() {
 			c.err = err
 			c.cancel()
 			_ = c.rtspSocket.Close()
-			// c.RUnlock()
 			return
 		}
 		err = br.UnreadByte()
 		if err != nil {
 			c.err = fmt.Errorf("failed to unread socket input byte: %w", err)
 			c.cancel()
-			// c.RUnlock()
 			return
 		}
 
@@ -190,12 +185,10 @@ func (c *client) readLoop() {
 			case err != nil:
 				c.err = fmt.Errorf("failed to read interleaved frame header: %w", err)
 				c.cancel()
-				// c.RUnlock()
 				return
 			case i != 4:
 				c.err = errors.New("failed to read interleaved frame header, short read")
 				c.cancel()
-				// c.RUnlock()
 				return
 			}
 
@@ -207,20 +200,17 @@ func (c *client) readLoop() {
 			case err != nil:
 				c.err = fmt.Errorf("failed to read interleaved frame payload: %w", err)
 				c.cancel()
-				// c.RUnlock()
 				return
 			case i != int(length):
 				c.err = fmt.Errorf(
 					"failed to read interleaved frame payload, short read expected %d, read %d", length, i)
 				c.cancel()
-				// c.RUnlock()
 				return
 			}
 
 			for _, handler := range c.interleavedFrameSubscribers {
 				handler(channel, payload)
 			}
-			// c.RUnlock()
 			continue
 		}
 
@@ -228,7 +218,6 @@ func (c *client) readLoop() {
 		if err != nil {
 			c.err = fmt.Errorf("failed to read RTSP status line: %w", err)
 			c.cancel()
-			// c.RUnlock()
 			return
 		}
 		var headers map[string][]string
@@ -236,7 +225,6 @@ func (c *client) readLoop() {
 		if err != nil {
 			c.err = fmt.Errorf("failed to read RTSP headers: %w", err)
 			c.cancel()
-			// c.RUnlock()
 			return
 		}
 		var body io.ReadWriter
@@ -253,13 +241,11 @@ func (c *client) readLoop() {
 			switch {
 			case err != nil:
 				c.err = fmt.Errorf("failed to read body of RTSP: %w", err)
-				// c.RUnlock()
 				c.cancel()
 				return
 			case i != length:
 				c.err = fmt.Errorf(
 					"failed to read body of RTSP: short read, expected %d read %d", length, i)
-				// c.RUnlock()
 				c.cancel()
 				return
 			}
@@ -275,7 +261,6 @@ func (c *client) readLoop() {
 			// This is a response
 			if !c.requestQueue.Has(cSeqStr) {
 				c.err = fmt.Errorf("failed to read body of RTSP: %w", err)
-				// c.RUnlock()
 				c.cancel()
 				return
 			}
@@ -285,7 +270,6 @@ func (c *client) readLoop() {
 			code, err := strconv.Atoi(parts[1])
 			if err != nil {
 				c.err = fmt.Errorf("failed to parse response code: %w", err)
-				// c.RUnlock()
 				c.cancel()
 				return
 			}
@@ -300,7 +284,6 @@ func (c *client) readLoop() {
 				Header:   headers,
 				Body:     body,
 			})
-			// c.RUnlock()
 			continue
 		}
 
@@ -311,7 +294,6 @@ func (c *client) readLoop() {
 		version := parts[1]
 
 		for _, hFn := range c.requestSubscribers {
-
 			go func() {
 				err = hFn(&Request{
 					Version:  version,
@@ -328,7 +310,6 @@ func (c *client) readLoop() {
 				}
 			}()
 		}
-		// c.RUnlock()
 	}
 }
 func (c *client) Err() error {

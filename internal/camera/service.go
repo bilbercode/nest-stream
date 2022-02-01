@@ -15,6 +15,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bilbercode/nest-stream/internal/devices"
+
 	log "github.com/sirupsen/logrus"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -26,7 +28,6 @@ import (
 	"github.com/pion/sdp/v3"
 
 	"github.com/bilbercode/nest-stream/internal/rtsp"
-	"github.com/bilbercode/nest-stream/internal/sdm"
 )
 
 var (
@@ -49,12 +50,12 @@ var (
 
 type service struct {
 	rtsp     rtsp.Server
-	sdm      sdm.Service
+	sdm      devices.Service
 	basePath string
 	cancel   context.CancelFunc
 }
 
-func NewService(sdm sdm.Service, rtsp rtsp.Server, basePath string) Service {
+func NewService(sdm devices.Service, rtsp rtsp.Server, basePath string) Service {
 	return &service{sdm: sdm, rtsp: rtsp, basePath: basePath}
 }
 
@@ -64,8 +65,8 @@ func (s *service) Start(ctx context.Context) error {
 	group, ctx := errgroup.WithContext(ctx)
 	var deregister func()
 	group.Go(func() error {
-		deregister = s.sdm.Subscribe(func(event *sdm.Event) {
-			if event.Type == sdm.EventTypeStartCamera {
+		deregister = s.sdm.Subscribe(func(event *devices.Event) {
+			if event.Type == devices.EventTypeStartCamera {
 				log.Infof("camera `%s` start received from SDM service", event.Meta.Name)
 				err := s.StartProxy(ctx, event.Meta)
 
@@ -99,47 +100,40 @@ func (s *service) Close() {
 	}
 }
 
-func (s *service) StartProxy(ctx context.Context, camera *sdm.Meta) error {
+func (s *service) StartProxy(ctx context.Context, camera *devices.Meta) error {
 
 	var media *sdp.MediaDescription
 	var conference rtsp.Camera
 	for {
 		log.Infof("querying SDM for new RTSPs stream URL for camera %s", camera.Name)
-		tokens, err := s.sdm.GenerateRTSPStream(ctx, camera.Id)
+		addr, err := s.sdm.RequestRTSPURL(ctx, camera.Id)
 		switch {
 		case err != nil:
 			log.Error(err)
 			sdmErrors.WithLabelValues("500", "internal")
 			return err
-		case tokens == nil:
-			log.Errorf("No token returned from SDM for camera %s", camera.Name)
-			sdmErrors.WithLabelValues("500", "no_tokens")
-			<-time.After(time.Second * 2)
 		}
 		log.Infof("SDM returned RTSP target for camera %s", camera.Name)
 
-		for _, addr := range tokens.URLS {
-			if media == nil {
-				log.Infof("Querying SDP from RTSP server for camera %s", camera.Name)
-				media, err = s.GetVideoMediaDescription(ctx, addr)
-				if err != nil {
-					return err
-				}
-				log.Infof("Registering camera feed with RTSP service for camera %s", camera.Name)
-				conference = s.rtsp.RegisterCamera(camera.Name, media)
-				log.Infof("camera feed %s is now available at `%s`", camera.Name, path.Join(s.basePath, camera.Name))
-			}
-			err := s.streamToCompletion(ctx, addr, media, conference)
+		if media == nil {
+			log.Infof("Querying SDP from RTSP server for camera %s", camera.Name)
+			media, err = s.GetVideoMediaDescription(ctx, addr)
 			if err != nil {
-				<-time.After(time.Second * 2)
-				cameraErrors.WithLabelValues(camera.Name).Inc()
-				log.WithError(err).Warn("camera stream error")
-				continue
+				return err
 			}
-			log.Infof("camera stream %s completed section, moving to next interval", camera.Name)
-			cameraRestarts.WithLabelValues(camera.Name).Inc()
-
+			log.Infof("Registering camera feed with RTSP service for camera %s", camera.Name)
+			conference = s.rtsp.RegisterCamera(camera.Name, media)
+			log.Infof("camera feed %s is now available at `%s`", camera.Name, path.Join(s.basePath, camera.Name))
 		}
+		err = s.streamToCompletion(ctx, addr, media, conference)
+		if err != nil {
+			<-time.After(time.Second * 2)
+			cameraErrors.WithLabelValues(camera.Name).Inc()
+			log.WithError(err).Warn("camera stream error")
+			continue
+		}
+		log.Infof("camera stream %s completed section, moving to next interval", camera.Name)
+		cameraRestarts.WithLabelValues(camera.Name).Inc()
 	}
 }
 

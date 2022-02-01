@@ -17,7 +17,6 @@ type merger struct {
 }
 
 func (m *merger) MergeStream(in <-chan *rtp.Packet, sessionID string) {
-	//var received uint16
 	first := true
 	for {
 		m.Lock()

@@ -8,6 +8,8 @@ import (
 	"net/url"
 	"os"
 
+	"github.com/bilbercode/nest-stream/internal/devices"
+
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/bilbercode/nest-stream/internal/api"
@@ -29,8 +31,6 @@ import (
 	"google.golang.org/grpc/health"
 
 	"github.com/bilbercode/nest-stream/internal/rtsp"
-
-	"github.com/bilbercode/nest-stream/internal/sdm"
 
 	"github.com/bilbercode/nest-stream/internal/auth"
 	"golang.org/x/sync/errgroup"
@@ -74,6 +74,13 @@ func main() {
 		Desc:   "google project ID",
 		EnvVar: "PROJECT_ID",
 		Value:  "",
+	})
+
+	sdmGRPCEndpoint := app.String(cli.StringOpt{
+		Name:   "sdm-grpc-url",
+		EnvVar: "SDM_GRPC_URL",
+		Desc:   "SDM grpc api url",
+		Value:  "smartdevicemanagement.googleapis.com:443",
 	})
 
 	credentialsLocation := app.String(cli.StringOpt{
@@ -122,14 +129,14 @@ func main() {
 
 		group.Go(func() error {
 
-			var client *http.Client
+			var config *auth.OAuthConfiguration
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
-			case client = <-authManager.GetClient():
+			case config = <-authManager.GetConfig():
 			}
 
-			deviceClient, err := sdm.NewService(client, *database)
+			deviceClient, err := devices.NewService(ctx, *sdmGRPCEndpoint, *database, config.Config, config.Token)
 			if err != nil {
 				log.WithError(err).Panic("failed to start SDM service")
 			}

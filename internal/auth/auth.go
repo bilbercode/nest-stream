@@ -14,6 +14,11 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+type OAuthConfiguration struct {
+	Config *oauth2.Config
+	Token  *oauth2.Token
+}
+
 type Manager struct {
 	sync.Mutex
 	projectID     string
@@ -21,7 +26,7 @@ type Manager struct {
 	config        *oauth2.Config
 	cancel        context.CancelFunc
 	token         *oauth2.Token
-	c             chan *http.Client
+	c             chan *OAuthConfiguration
 	endpoint      string
 	tokenLocation string
 	mux           *http.ServeMux
@@ -44,14 +49,14 @@ func NewManager(projectID string, credentials, tokenLocation, endpoint string) (
 	return &Manager{
 		Mutex:         sync.Mutex{},
 		config:        config,
-		c:             make(chan *http.Client),
+		c:             make(chan *OAuthConfiguration),
 		tokenLocation: tokenLocation,
 		endpoint:      endpoint,
 		mux:           http.NewServeMux(),
 	}, nil
 }
 
-func (a *Manager) GetClient() <-chan *http.Client {
+func (a *Manager) GetConfig() <-chan *OAuthConfiguration {
 	return a.c
 }
 
@@ -102,13 +107,15 @@ func (a *Manager) runWeb(ctx context.Context) error {
 		}
 		a.token = token
 
-		client := a.config.Client(ctx, token)
 		select {
 		case <-ctx.Done():
 			writer.WriteHeader(http.StatusGone)
 		case <-request.Context().Done():
 			writer.WriteHeader(http.StatusGone)
-		case a.c <- client:
+		case a.c <- &OAuthConfiguration{
+			Config: a.config,
+			Token:  token,
+		}:
 			writer.WriteHeader(http.StatusOK)
 			writer.Write([]byte("done"))
 		}
@@ -125,7 +132,7 @@ func (a *Manager) runWeb(ctx context.Context) error {
 	return group.Wait()
 }
 
-func (a *Manager) checkForStoredTokenClient(ctx context.Context, c chan<- *http.Client) error {
+func (a *Manager) checkForStoredTokenClient(ctx context.Context, c chan<- *OAuthConfiguration) error {
 	tok, err := getTokenFromFS(a.tokenLocation)
 	if err != nil {
 		fmt.Println("please go to " + a.endpoint + "/oauth2/start")
@@ -133,11 +140,13 @@ func (a *Manager) checkForStoredTokenClient(ctx context.Context, c chan<- *http.
 	}
 	a.token = tok
 
-	client := a.config.Client(ctx, tok)
 	select {
 	case <-ctx.Done():
 		return nil
-	case c <- client:
+	case c <- &OAuthConfiguration{
+		Config: a.config,
+		Token:  tok,
+	}:
 		return nil
 	}
 
