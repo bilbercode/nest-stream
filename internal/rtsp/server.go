@@ -279,16 +279,38 @@ func (s *server) handleSetup(ctx context.Context, request *Request, cli Client) 
 				sent++
 				oc += uint32(len(b))
 			},
-			func(packet rtcp.Packet) {
-				payload := []byte{0x24, 1, 0x00, 0x00}
-				b, err := packet.Marshal()
-				if err != nil {
-					binary.BigEndian.PutUint16(payload[:2], uint16(len(b)))
-				}
-				payload = append(payload, b...)
-				cli.Conn().Write(payload)
-			},
+			func(packet rtcp.Packet) {},
 		)
+
+		go func() {
+			timer := time.NewTimer(time.Second * 10)
+			for {
+				select {
+				case <-timer.C:
+
+					report := rtcp.SenderReport{
+						SSRC: ssrc,
+						NTPTime: func() uint64 {
+							s := (float64(time.Now().UnixNano()) / 1000000000) + 2208988800
+							integerPart := uint32(s)
+							fractionalPart := uint32((s - float64(integerPart)) * 0xFFFFFFFF)
+							return uint64(integerPart)<<32 | uint64(fractionalPart)
+						}(),
+						RTPTime:     lastRTPTimeRPT + uint32(time.Now().Sub(lastRTPTime).Seconds()*90000),
+						PacketCount: sent,
+						OctetCount:  oc,
+					}
+
+					b, err := report.Marshal()
+					if err == nil {
+						payload := []byte{0x24, 1, 0x00, 0x00}
+						binary.BigEndian.PutUint16(payload[2:], uint16(len(b)))
+						payload = append(payload, b...)
+						cli.Conn().Write(payload)
+					}
+				}
+			}
+		}()
 
 		header := http.Header{}
 		header.Set("Session", "3984798345")

@@ -15,6 +15,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pion/rtcp"
+
 	"github.com/bilbercode/nest-stream/internal/devices"
 
 	log "github.com/sirupsen/logrus"
@@ -246,6 +248,11 @@ func (s *service) streamToCompletion(ctx context.Context, addr string, media *sd
 				}
 			}
 			il.Unlock()
+		} else {
+			packets, err := rtcp.Unmarshal(payload)
+			if err == nil && !closing {
+				fmt.Println(packets)
+			}
 		}
 	})
 
