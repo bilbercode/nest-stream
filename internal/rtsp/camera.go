@@ -76,7 +76,6 @@ func (c *camera) Teardown(id string) {
 func (c *camera) Play(id string) {
 	c.Lock()
 	defer c.Unlock()
-	//TODO (bilbercode) start sending RTCP packets for subscriber
 	c.subscribers[id].ready = true
 }
 

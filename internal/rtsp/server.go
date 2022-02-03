@@ -137,7 +137,6 @@ func (s *server) handle(ctx context.Context, nc net.Conn) {
 	})
 
 	<-cli.Done()
-	// TODO (bilbercode) log any errors error
 }
 
 func (s *server) handleOptions(ctx context.Context, request *Request, cli Client) error {
@@ -255,7 +254,6 @@ func (s *server) handleSetup(ctx context.Context, request *Request, cli Client) 
 			})
 		}
 
-		//senderLock := sync.Mutex{}
 		ssrc := uint32(0)
 		lastRTPTime := time.Now()
 		lastRTPTimeRPT := uint32(0)
@@ -265,7 +263,6 @@ func (s *server) handleSetup(ctx context.Context, request *Request, cli Client) 
 		camera.RegisterSubscriber(
 			"3984798345",
 			func(packet *rtp.Packet) {
-				//senderLock.Lock()
 				ssrc = packet.SSRC
 				lastRTPTimeRPT = packet.Timestamp
 				lastRTPTime = time.Now()
@@ -281,7 +278,6 @@ func (s *server) handleSetup(ctx context.Context, request *Request, cli Client) 
 				}
 				sent++
 				oc += uint32(len(b))
-				//senderLock.Unlock()
 			},
 			func(packet rtcp.Packet) {
 				payload := []byte{0x24, 1, 0x00, 0x00}

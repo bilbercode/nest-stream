@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 
+	"github.com/bilbercode/nest-stream/internal/authentication"
 	"github.com/bilbercode/nest-stream/internal/devices"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -32,7 +33,6 @@ import (
 
 	"github.com/bilbercode/nest-stream/internal/rtsp"
 
-	"github.com/bilbercode/nest-stream/internal/auth"
 	"golang.org/x/sync/errgroup"
 
 	cli "github.com/jawher/mow.cli"
@@ -107,7 +107,7 @@ func main() {
 	app.Action = func() {
 		ctx := context.Background()
 
-		authManager, err := auth.NewManager(*projectID, *credentialsLocation, *tokenLocation, *httpBaseURL)
+		authManager, err := authentication.NewManager(*projectID, *credentialsLocation, *tokenLocation, *httpBaseURL)
 		if err != nil {
 			log.WithError(err).Panic("failed to create authentication manager")
 		}
@@ -129,7 +129,7 @@ func main() {
 
 		group.Go(func() error {
 
-			var config *auth.OAuthConfiguration
+			var config *authentication.OAuthConfiguration
 			select {
 			case <-ctx.Done():
 				return ctx.Err()

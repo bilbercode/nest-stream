@@ -9,8 +9,6 @@ const (
 	MethodDescribe     Method = "DESCRIBE"
 	MethodPlay         Method = "PLAY"
 	MethodGetParameter Method = "GET_PARAMETER"
-	MethodSetParameter Method = "SET_PARAMETER"
-	MethodPause        Method = "PAUSE"
 	MethodAnnounce     Method = "ANNOUNCE"
 )
 

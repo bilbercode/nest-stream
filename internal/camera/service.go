@@ -281,7 +281,6 @@ func (s *service) streamToCompletion(ctx context.Context, addr string, media *sd
 
 				if err != nil {
 					cancelFunc()
-					// Close the net connection as we failed to contact the server, it's gone away
 					return
 				}
 				if res == nil || ctx.Err() != nil {
